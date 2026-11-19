@@ -1,33 +1,54 @@
 ﻿function Read-State {
-    $cards = @(Physical-Cards)
-    $ips = @(Get-NetIPInterface -PolicyStore ActiveStore | Where-Object InterfaceIndex -in $cards.ifIndex)
+    $ips = @(Get-NetIPInterface -PolicyStore ActiveStore)
+    $profiles = @(Get-NetConnectionProfile -ErrorAction SilentlyContinue)
+    $cards = @(Physical-Cards -ips $ips -profiles $profiles)
+    $ips = @($ips | Where-Object InterfaceIndex -in $cards.ifIndex)
     $routes = @(Get-NetRoute -PolicyStore ActiveStore | Where-Object { $_.DestinationPrefix -in '0.0.0.0/0','::/0' -and $_.InterfaceIndex -in $cards.ifIndex })
     $probe=Find-NetRoute -RemoteIPAddress '1.1.1.1' -ErrorAction SilentlyContinue | Where-Object DestinationPrefix | Select-Object -First 1
     [pscustomobject]@{ Cards=$cards; Ips=$ips; Routes=$routes; Via=$probe.InterfaceAlias }
 }
 function Is-Wifi($adapter) {
-    $adapter.NdisPhysicalMedium -in 1,9 -or $adapter.MediaType -eq 'Native 802.11'
+    $adapter.InterfaceType -eq 71 -or $adapter.NdisPhysicalMedium -in 1,9 -or $adapter.MediaType -eq 'Native 802.11'
 }
 function Disabled-Devices {
     # Disabled drivers can disappear from MSFT_NetAdapter completely after a reboot.
     foreach ($pnp in Get-CimInstance Win32_PnPEntity -Filter "PNPClass='Net' AND ConfigManagerErrorCode=22") {
         if (!$pnp.Present) {continue}
-        $driver=(Get-PnpDeviceProperty -InstanceId $pnp.DeviceID -KeyName DEVPKEY_Device_Driver).Data
-        $key=Get-ItemProperty -LiteralPath ("HKLM:\SYSTEM\CurrentControlSet\Control\Class\"+$driver)
+        $driver=(Get-PnpDeviceProperty -InstanceId $pnp.DeviceID -KeyName DEVPKEY_Device_Driver -ErrorAction SilentlyContinue).Data
+        if (!$driver) {continue}
+        $key=Get-ItemProperty -LiteralPath ("HKLM:\SYSTEM\CurrentControlSet\Control\Class\"+$driver) -ErrorAction SilentlyContinue
         if (!($key.Characteristics -band 4) -or $key.'*IfType' -notin 6,71 -or !$key.NetCfgInstanceId) {continue}
         [pscustomobject]@{
             InterfaceGuid=$key.NetCfgInstanceId; PnPDeviceID=$pnp.DeviceID
-            Name=$pnp.Name; Status='Disabled'; NeedsPnpEnable=$true
+            Name=$pnp.Name; LinkState='Disabled'; Status='Disabled'; NeedsPnpEnable=$true
             NdisPhysicalMedium=if ($key.'*IfType' -eq 71) {9} else {14}
         }
     }
 }
-function Physical-Cards {
+function Resolve-LinkState($card,$ip,$profile) {
+    # Numeric NDIS/IF_OPER_STATUS values are independent of Windows display language.
+    if ($card.NeedsPnpEnable -or $card.Status -eq 'Disabled' -or $card.InterfaceAdminStatus -eq 2) {return 'Disabled'}
+    if ($card.MediaConnectState -eq 2 -or $card.MediaConnectionState -eq 'Disconnected') {return 'Disconnected'}
+    if ($card.MediaConnectState -eq 1 -or $card.MediaConnectionState -eq 'Connected' -or $card.InterfaceOperationalStatus -eq 1) {return 'Up'}
+    if ($card.Status -eq 'Up') {return 'Up'}
+    $active=@($profile.IPv4Connectivity)+@($profile.IPv6Connectivity)
+    if ($ip.ConnectionState -contains 'Connected' -or @($active | Where-Object {$_ -in 'Subnet','LocalNetwork','Internet'}).Count) {return 'Up'}
+    if ($card.Status -eq 'Disconnected' -or $card.InterfaceOperationalStatus -in 2,7) {return 'Disconnected'}
+    return 'Unknown'
+}
+function Physical-Cards($ips=$(Get-NetIPInterface -PolicyStore ActiveStore),$profiles=$(Get-NetConnectionProfile -ErrorAction SilentlyContinue)) {
     $disabled=@(Disabled-Devices)
     foreach ($card in Get-NetAdapter -IncludeHidden) {
-        if (!$card.HardwareInterface -or $card.Virtual -or $card.Status -eq 'Not Present') {continue}
-        if (!(Is-Wifi $card) -and $card.MediaType -ne '802.3' -and $card.NdisPhysicalMedium -ne 14) {continue}
-        if ($card.PnPDeviceID -notin $disabled.PnPDeviceID) {$card}
+        if (!$card.HardwareInterface -or $card.Virtual -or $card.Status -eq 'Not Present' -or $card.InterfaceOperationalStatus -eq 6) {continue}
+        if ($card.NdisPhysicalMedium -in 8,10) {continue}
+        if (!(Is-Wifi $card) -and $card.MediaType -ne '802.3' -and $card.NdisPhysicalMedium -ne 14 -and $card.InterfaceType -ne 6) {continue}
+        if ($card.PnPDeviceID -in $disabled.PnPDeviceID) {continue}
+        $ip=@($ips | Where-Object InterfaceIndex -eq $card.ifIndex)
+        $profile=@($profiles | Where-Object InterfaceIndex -eq $card.ifIndex)
+        $state=Resolve-LinkState $card $ip $profile
+        $card | Add-Member -NotePropertyName LinkState -NotePropertyValue $state -Force
+        $card | Add-Member -NotePropertyName HasInternetProfile -NotePropertyValue ($profile.IPv4Connectivity -contains 'Internet' -or $profile.IPv6Connectivity -contains 'Internet') -Force
+        $card
     }
     $disabled
 }
@@ -38,12 +59,12 @@ function Restore-Card($card) {
     if (!$card) {throw '系统未检测到需要恢复的设备。'}
     if ($card.NeedsPnpEnable) {
         Enable-PnpDevice -InstanceId $card.PnPDeviceID -Confirm:$false
-    } elseif ($card.Status -eq 'Disabled') {
+    } elseif ($card.LinkState -eq 'Disabled') {
         $card | Enable-NetAdapter -Confirm:$false
     }
 }
 function Online($card) {
-    if (!$card -or $card.Status -ne 'Up') {return $false}
+    if (!$card -or $card.LinkState -ne 'Up') {return $false}
     $profile=Get-NetConnectionProfile -InterfaceIndex $card.ifIndex -ErrorAction SilentlyContinue
     $routes=@(Get-NetRoute -InterfaceIndex $card.ifIndex -PolicyStore ActiveStore -ErrorAction SilentlyContinue)
     ($profile.IPv4Connectivity -contains 'Internet' -and '0.0.0.0/0' -in $routes.DestinationPrefix) -or
@@ -65,7 +86,7 @@ function Wait-Line($id,$wifiTarget) {
     do {
         $card=Lookup-Card $id
         if (Online $card) {return}
-        if (!$opened -and $wifiTarget -and $card.Status -eq 'Disconnected') {
+        if (!$opened -and $wifiTarget -and $card.LinkState -in 'Disconnected','Unknown') {
             Start-Process explorer.exe 'ms-availablenetworks:'
             $opened=$true
         }
@@ -78,8 +99,8 @@ function Confirm-Switch($id,$wifiTarget,$disabledIds) {
     $deadline=[DateTime]::UtcNow.AddSeconds(15)
     do {
         $all=@(Physical-Cards)
-        $remaining=@($all | Where-Object { (Is-Wifi $_) -ne $wifiTarget -and $_.Status -ne 'Disabled' })
-        $disabled=@($all | Where-Object Status -eq 'Disabled' | ForEach-Object { [guid]$_.InterfaceGuid })
+        $remaining=@($all | Where-Object { (Is-Wifi $_) -ne $wifiTarget -and $_.LinkState -ne 'Disabled' })
+        $disabled=@($all | Where-Object LinkState -eq 'Disabled' | ForEach-Object { [guid]$_.InterfaceGuid })
         $missing=@($disabledIds | Where-Object { $_ -notin $disabled })
         if (!$remaining.Count -and !$missing.Count -and (Online ($all | Where-Object { [guid]$_.InterfaceGuid -eq $id }))) {
             $stable++
@@ -97,13 +118,13 @@ function Undo-Line($entry) {
     $deadline=[DateTime]::UtcNow.AddSeconds(25)
     do {
         $card=Lookup-Card $entry.Id
-        if ($entry.Profile -and !$joinRequested -and $card.Status -in 'Up','Disconnected') {
-            if ($card.Status -ne 'Up' -or (Wireless-Profile $card) -cne $entry.Profile) {
+        if ($entry.Profile -and !$joinRequested -and $card.LinkState -in 'Up','Disconnected') {
+            if ($card.LinkState -ne 'Up' -or (Wireless-Profile $card) -cne $entry.Profile) {
                 Reconnect-Wireless $card $entry.Profile
                 $joinRequested=$true
             }
         }
-        if ($card -and $card.Status -notin 'Disabled','Not Present' -and (!$entry.WasUp -or $card.Status -eq 'Up')) {
+        if ($card -and $card.LinkState -notin 'Disabled','Not Present' -and (!$entry.WasUp -or $card.LinkState -eq 'Up')) {
             if ((!$entry.Profile -or (Wireless-Profile $card) -ceq $entry.Profile) -and (!$entry.WasOnline -or (Online $card))) {return}
         }
         Start-Sleep -Milliseconds 500
@@ -118,14 +139,15 @@ function Switch-Line([guid]$id) {
     Wait-Line $id $wifiTarget
     $changes=New-Object Collections.Stack
     try {
-        $others=@(Physical-Cards | Where-Object { (Is-Wifi $_) -ne $wifiTarget -and $_.Status -ne 'Disabled' })
+        $others=@(Physical-Cards | Where-Object { (Is-Wifi $_) -ne $wifiTarget -and $_.LinkState -ne 'Disabled' })
         foreach ($other in $others) {
+            if ($other.LinkState -eq 'Unknown') {throw "Windows 尚未确认 $($other.Name) 的连接状态，请稍后重试。"}
             $profile=$null
-            if ((Is-Wifi $other) -and $other.Status -eq 'Up') {
+            if ((Is-Wifi $other) -and $other.LinkState -eq 'Up') {
                 $profile=Wireless-Profile $other
             }
             if (!(Online (Lookup-Card $id))) {throw '目标线路已掉线。'}
-            $changes.Push([pscustomobject]@{Id=[guid]$other.InterfaceGuid; Name=$other.Name; Profile=$profile; WasUp=$other.Status -eq 'Up'; WasOnline=(Online $other)})
+            $changes.Push([pscustomobject]@{Id=[guid]$other.InterfaceGuid; Name=$other.Name; Profile=$profile; WasUp=$other.LinkState -eq 'Up'; WasOnline=(Online $other)})
             $other | Disable-NetAdapter -Confirm:$false
         }
         Confirm-Switch $id $wifiTarget @($changes | ForEach-Object {$_.Id})

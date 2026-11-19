@@ -16,6 +16,7 @@ function Reset-Cards {
 }
 function Get-NetAdapter {param([switch]$IncludeHidden) $devices}
 function Get-CimInstance {param($ClassName,$Filter) $pnp}
+function Get-NetIPInterface {param($PolicyStore)}
 function Get-NetConnectionProfile {param($InterfaceIndex,$ErrorAction)
     $c=$devices | Where-Object ifIndex -eq $InterfaceIndex
     if ($c.HasInternet) {[pscustomobject]@{IPv4Connectivity='Internet'}}
@@ -56,6 +57,26 @@ function Expect-Failure($id,$pattern) {
     try {Switch-Line $id} catch {$caught=$_.Exception.Message}
     Assert ($caught -like $pattern) "unexpected result: $caught"
 }
+# Driver status strings may be absent or localized. Match system evidence by adapter.
+Reset-Cards
+$wifi.Status='未知'
+$wifi | Add-Member InterfaceType 71
+$wifi.NdisPhysicalMedium=0
+$wire | Add-Member InterfaceType 6
+$wire.NdisPhysicalMedium=0
+$wire.Status='未知'
+$profile=[pscustomobject]@{InterfaceIndex=$wifi.ifIndex;IPv4Connectivity='Internet'}
+$cards=@(Physical-Cards -ips @() -profiles @($profile))
+Assert ($cards[0].LinkState -eq 'Up' -and (Is-Wifi $cards[0])) 'Wi-Fi profile evidence ignored'
+Assert ($cards[1].LinkState -eq 'Unknown') 'other adapter inherited Wi-Fi Internet status'
+$wire | Add-Member MediaConnectState 1
+Assert ((Resolve-LinkState $wire @() @()) -eq 'Up') 'connected media without Internet misread'
+$wire.MediaConnectState=2
+Assert ((Resolve-LinkState $wire @() $profile) -eq 'Disconnected') 'stale profile overrode unplug'
+$wire | Add-Member InterfaceAdminStatus 2
+Assert ((Resolve-LinkState $wire @() $profile) -eq 'Disabled') 'disabled adapter inherited stale state'
+$wifi.Status='Unknown'
+Assert ((Resolve-LinkState $wifi @([pscustomobject]@{ConnectionState='Connected'}) @()) -eq 'Up') 'IP interface fallback failed'
 Reset-Cards
 Switch-Line $wire.InterfaceGuid
 Assert ($wifi.Status -eq 'Disabled' -and $wire.Status -eq 'Up' -and $drops -eq 1) 'ethernet switch failed'

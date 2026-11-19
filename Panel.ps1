@@ -46,10 +46,12 @@ $deck.AutoScroll=$true
 $deck.WrapContents=$false
 $wifi=Control Button '更换 Wi-Fi 热点…' 24 348 170 36
 $wifi.Enabled=$false
+$diagnostics=Control Button '复制状态诊断' 208 348 145 36
+$diagnostics.Enabled=$false
 $refresh=Control Button '刷新状态' 511 21 101 32
 $updated=Control Label '正在读取状态…' 300 21 201 32
 $updated.TextAlign='MiddleRight'
-foreach ($b in $wifi,$refresh) {
+foreach ($b in $wifi,$refresh,$diagnostics) {
     $b.FlatStyle='Flat'
     $b.FlatAppearance.BorderSize=0
     $b.BackColor=[Drawing.Color]::FromArgb(224,233,241)
@@ -57,9 +59,9 @@ foreach ($b in $wifi,$refresh) {
 }
 $note=Control Label '选好目标线路后，面板会先确认它能上网，再断开另一条线路。' 24 404 588 80
 function Add-Card($c) {
-    $wireless=$c.NdisPhysicalMedium -in 1,9 -or $c.MediaType -eq 'Native 802.11'
+    $wireless=Is-Wifi $c
     $kind=if ($wireless) {'Wi-Fi'} else {'网线'}
-    $up=$c.Status -eq 'Up'
+    $up=$c.LinkState -eq 'Up'
     $card=New-Object Windows.Forms.Panel
     $card.Size=New-Object Drawing.Size(285,134)
     $card.Margin=New-Object Windows.Forms.Padding(0,0,12,0)
@@ -71,7 +73,7 @@ function Add-Card($c) {
     $symbol.ForeColor=$teal
     $heading=Control Label $kind 55 12 110 32
     $heading.Font=New-Object Drawing.Font('Microsoft YaHei UI',15,[Drawing.FontStyle]::Bold)
-    $state=Control Label $(if ($up) {'已连接'} elseif ($c.Status -eq 'Disabled' -or $c.NeedsPnpEnable) {'已停用'} else {'未连接'}) 174 16 94 24
+    $state=Control Label $(if ($up -and $c.HasInternetProfile) {'已连接 · 可上网'} elseif ($up) {'已连接'} elseif ($c.LinkState -eq 'Disabled' -or $c.NeedsPnpEnable) {'已停用'} elseif ($c.LinkState -eq 'Disconnected') {'未连接'} else {'状态未知'}) 146 16 122 24
     $state.TextAlign='MiddleRight'
     $state.ForeColor=if ($up) {$teal} else {[Drawing.Color]::DimGray}
     $alias=Control Label $c.Name 17 49 250 24
@@ -88,7 +90,7 @@ function Add-Card($c) {
 }
 function Show-State($s) {
     try {
-        $cardState=ConvertTo-Json -Compress -InputObject @($s.Cards | Select-Object InterfaceGuid,Name,Status,NdisPhysicalMedium,MediaType)
+        $cardState=ConvertTo-Json -Compress -InputObject @($s.Cards | Select-Object InterfaceGuid,Name,LinkState,HasInternetProfile,InterfaceType,NdisPhysicalMedium,MediaType)
         if ($cardState -ne $script:lastCards) {
             while ($deck.Controls.Count) {$deck.Controls[0].Dispose()}
             foreach ($c in $s.Cards) {Add-Card $c}
@@ -106,14 +108,16 @@ function Show-State($s) {
         $via=if ($s.Via) {$s.Via} else {'无可用路由'}
         $wl=@($s.Cards | Where-Object {Is-Wifi $_})
         $lan=@($s.Cards | Where-Object {!(Is-Wifi $_)})
-        $wifiOnly=('Up' -in $wl.Status -and !@($lan | Where-Object Status -ne 'Disabled').Count)
-        $wiredOnly=('Up' -in $lan.Status -and !@($wl | Where-Object Status -ne 'Disabled').Count)
-        $modeText=if ($wifiOnly) {'仅使用 Wi-Fi'} elseif ($wiredOnly) {'仅使用网线'} elseif ('Up' -in $wl.Status -and 'Up' -in $lan.Status) {'两条线路均已连接，请选择下方一条线路'} else {'尚未确认独占线路'}
+        $wifiOnly=('Up' -in $wl.LinkState -and !@($lan | Where-Object LinkState -ne 'Disabled').Count)
+        $wiredOnly=('Up' -in $lan.LinkState -and !@($wl | Where-Object LinkState -ne 'Disabled').Count)
+        $modeText=if ($wifiOnly) {'仅使用 Wi-Fi'} elseif ($wiredOnly) {'仅使用网线'} elseif ('Up' -in $wl.LinkState -and 'Up' -in $lan.LinkState) {'两条线路均已连接，请选择下方一条线路'} else {'尚未确认独占线路'}
         $summary.Text=(@($modeText) + $lines + "系统到 1.1.1.1 的路由：$via") -join "`r`n"
         $wifi.Enabled=$wifiOnly -and !$script:pending
         if (!$deck.Controls.Count) {$summary.Text='未找到物理网卡，正在等待设备。'}
         $updated.Text='最近更新  '+(Get-Date -Format 'HH:mm:ss')
         $script:stateValid=$true
+        $script:snapshot=$s
+        $diagnostics.Enabled=$true
         $deck.Enabled=!$script:pending
     } catch { Show-ReadError $_ }
 }
@@ -121,6 +125,7 @@ function Show-ReadError($reason) {
     $script:stateValid=$false
     $deck.Enabled=$false
     $wifi.Enabled=$false
+    $diagnostics.Enabled=$false
     $updated.Text='等待重试'
     $summary.Text="状态读取失败，将自动重试：$reason"
 }
@@ -148,6 +153,22 @@ $workerTimer.Add_Tick({
     $note.Text=if ($success) {'已切换，另一条线路已断开。点击另一张卡片即可切回。'} else {'切换未完成，请检查目标线路后重试。'}
 })
 $refresh.Add_Click({Request-Refresh})
+$diagnostics.Add_Click({
+    try {
+        $report=foreach ($card in $script:snapshot.Cards) {
+            [ordered]@{
+                InterfaceIndex=$card.ifIndex; Model=$card.InterfaceDescription
+                InterfaceType=$card.InterfaceType; RawStatus=[string]$card.Status
+                Admin=$card.InterfaceAdminStatus; Operational=$card.InterfaceOperationalStatus
+                Media=$card.MediaConnectState; Result=$card.LinkState
+                WindowsInternet=[bool]$card.HasInternetProfile
+                IpState=@($script:snapshot.Ips | Where-Object InterfaceIndex -eq $card.ifIndex | ForEach-Object {"$($_.AddressFamily): $($_.ConnectionState)"})
+            }
+        }
+        [Windows.Forms.Clipboard]::SetText((ConvertTo-Json -InputObject @($report) -Depth 4))
+        $note.Text='已复制网卡型号和状态读数，可用于排查这台电脑的识别问题。'
+    } catch {$note.Text=$_.Exception.Message}
+})
 $wifi.Add_Click({
     try { Start-Process explorer.exe 'ms-availablenetworks:'; $note.Text='选择要连接的热点。网线保持停用。' }
     catch { $note.Text=$_.Exception.Message }

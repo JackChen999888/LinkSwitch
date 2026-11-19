@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*" Name="LinkSwitch 网络线路面板" Language="2052" Codepage="65001"
-           Version="1.0.0" Manufacturer="JackChen999888" UpgradeCode="CE76DA73-41A2-4F76-96DF-B72FAB53FCC9">
+           Version="1.0.1" Manufacturer="JackChen999888" UpgradeCode="CE76DA73-41A2-4F76-96DF-B72FAB53FCC9">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" SummaryCodepage="1252"/>
     <MajorUpgrade DowngradeErrorMessage="A newer version of LinkSwitch is already installed."/>
     <MediaTemplate EmbedCab="yes"/>

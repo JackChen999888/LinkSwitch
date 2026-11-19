@@ -6,7 +6,7 @@
 
 ## 安装
 
-1. 在 x64 Windows 上下载 [LinkSwitch 1.0.0 安装包](https://github.com/JackChen999888/LinkSwitch/releases/download/v1.0.0/LinkSwitch-1.0.0-x64.msi)。
+1. 在 x64 Windows 上下载 [LinkSwitch 1.0.1 安装包](https://github.com/JackChen999888/LinkSwitch/releases/download/v1.0.1/LinkSwitch-1.0.1-x64.msi)。
 2. 双击 MSI，按 Windows 提示完成安装。
 3. 从桌面或开始菜单打开 **LinkSwitch 网络线路面板**。程序使用 Windows PowerShell 5.1，切换网卡时需要管理员权限。
 

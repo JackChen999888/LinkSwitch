@@ -6,7 +6,7 @@ Keep your Ethernet cable plugged in and switch between wired Internet and Wi-Fi,
 
 ## Install
 
-1. On x64 Windows, download the [LinkSwitch 1.0.0 MSI installer](https://github.com/JackChen999888/LinkSwitch/releases/download/v1.0.0/LinkSwitch-1.0.0-x64.msi).
+1. On x64 Windows, download the [LinkSwitch 1.0.1 MSI installer](https://github.com/JackChen999888/LinkSwitch/releases/download/v1.0.1/LinkSwitch-1.0.1-x64.msi).
 2. Double-click the MSI and follow the Windows installation prompts.
 3. Open **LinkSwitch 网络线路面板** from the desktop or Start menu. The app uses Windows PowerShell 5.1. Windows requests administrator permission when you switch adapters.
 
