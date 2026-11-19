@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="LinkSwitch 网络线路面板" Language="2052" Codepage="65001"
+           Version="1.0.0" Manufacturer="JackChen999888" UpgradeCode="CE76DA73-41A2-4F76-96DF-B72FAB53FCC9">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" SummaryCodepage="1252"/>
+    <MajorUpgrade DowngradeErrorMessage="A newer version of LinkSwitch is already installed."/>
+    <MediaTemplate EmbedCab="yes"/>
+    <Icon Id="AppIcon.exe" SourceFile="网络线路面板.exe"/>
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.exe"/>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder"><Directory Id="INSTALLDIR" Name="LinkSwitch"/></Directory>
+      <Directory Id="ProgramMenuFolder"/>
+      <Directory Id="DesktopFolder"/>
+    </Directory>
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="Launcher" Guid="*" Win64="yes">
+        <File Id="LauncherExe" Source="网络线路面板.exe" KeyPath="yes">
+          <Shortcut Id="StartShortcut" Directory="ProgramMenuFolder" Name="LinkSwitch 网络线路面板" Advertise="yes" Icon="AppIcon.exe" WorkingDirectory="INSTALLDIR"/>
+          <Shortcut Id="DesktopShortcut" Directory="DesktopFolder" Name="LinkSwitch 网络线路面板" Advertise="yes" Icon="AppIcon.exe" WorkingDirectory="INSTALLDIR"/>
+        </File>
+      </Component>
+      <Component Id="Panel" Guid="*" Win64="yes"><File Source="Panel.ps1" KeyPath="yes"/></Component>
+      <Component Id="Network" Guid="*" Win64="yes"><File Source="Network.ps1" KeyPath="yes"/></Component>
+      <Component Id="Wlan" Guid="*" Win64="yes"><File Source="Wlan.cs" KeyPath="yes"/></Component>
+      <Component Id="IconFile" Guid="*" Win64="yes"><File Source="LinkSwitch.ico" KeyPath="yes"/></Component>
+      <Component Id="License" Guid="*" Win64="yes"><File Source="LICENSE" KeyPath="yes"/></Component>
+    </DirectoryRef>
+    <Feature Id="Application" Title="LinkSwitch" Level="1">
+      <ComponentRef Id="Launcher"/><ComponentRef Id="Panel"/><ComponentRef Id="Network"/>
+      <ComponentRef Id="Wlan"/><ComponentRef Id="IconFile"/><ComponentRef Id="License"/>
+    </Feature>
+  </Product>
+</Wix>
